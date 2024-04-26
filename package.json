@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-graphql": "^0.12.0",
+    "graphql": "^15.8.0",
+    "join-monster": "^3.3.4",
+    "nodemailer": "^6.9.13",
+    "pg": "^8.11.5"
+  }
+}
