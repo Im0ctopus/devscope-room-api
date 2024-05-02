@@ -41,6 +41,7 @@ const Room = new graphql.GraphQLObjectType({
         joinMonster: {
           sqlJoin: (roomTable, waitingTable, args) =>
             `${roomTable}.id = ${waitingTable}.roomid`,
+          orderBy: 'id',
         },
       },
     },
@@ -83,12 +84,12 @@ const QueryRoot = new graphql.GraphQLObjectType({
     waiting: {
       type: Waiting,
       args: {
-        roomid: { type: new graphql.GraphQLNonNull(graphql.GraphQLInt) },
+        waitid: { type: new graphql.GraphQLNonNull(graphql.GraphQLInt) },
       },
       extensions: {
         joinMonster: {
           where: (waitingTable, args, context) => {
-            return `${waitingTable}.roomid = ${args.roomid}`
+            return `${waitingTable}.id = ${args.waitid}`
           },
         },
       },
@@ -125,6 +126,44 @@ const MutationRoot = new graphql.GraphQLObjectType({
         }
       },
     },
+    cancel: {
+      type: Room,
+      args: {
+        roomid: { type: graphql.GraphQLNonNull(graphql.GraphQLInt) },
+      },
+      resolve: async (parent, args, context, resolveInfo) => {
+        try {
+          return (
+            await client.query(
+              'UPDATE Room SET BusyStart = NULL, BusyEnd = NULL, Organizer = NULL, Busy = FALSE WHERE Id = $1 RETURNING *',
+              [args.roomid]
+            )
+          ).rows[0]
+        } catch (err) {
+          console.error('Failed to cancel:', err)
+          throw new Error('Failed to cancel')
+        }
+      },
+    },
+    remove: {
+      type: Waiting,
+      args: {
+        waitid: { type: graphql.GraphQLNonNull(graphql.GraphQLInt) },
+      },
+      resolve: async (parent, args, context, resolveInfo) => {
+        try {
+          return (
+            await client.query(
+              'DELETE FROM waiting WHERE id = $1 RETURNING *',
+              [args.waitid]
+            )
+          ).rows[0]
+        } catch (err) {
+          console.error('Failed to remove:', err)
+          throw new Error('Failed to remove')
+        }
+      },
+    },
   }),
 })
 
@@ -146,7 +185,7 @@ const authenticateToken = (req, res, next) => {
 const app = express()
 app.use(
   '/api',
-  //   authenticateToken,
+  authenticateToken,
   graphqlHTTP({
     schema: schema,
     graphiql: true,
@@ -258,9 +297,9 @@ setInterval(async () => {
       ).rows[0]
       //Updates the room to busy with the end time +30min from the current
       const current = new Date().getTime()
-      const roomName = (
+      const room = (
         await client.query(
-          'UPDATE room SET busystart = $1, busyend = $2, organizer = $3, busy = TRUE WHERE id = $4 RETURNING name',
+          'UPDATE room SET busystart = $1, busyend = $2, organizer = $3, busy = TRUE WHERE id = $4 RETURNING name,id',
           [
             current,
             current + 1800000, //adiciona 30 min
@@ -268,7 +307,7 @@ setInterval(async () => {
             roomsWaited[i].roomid,
           ]
         )
-      ).rows[0].name
+      ).rows[0]
       //Email sender
       const mailOptions = {
         from: 'rooms.alert@hotmail.com',
@@ -276,8 +315,10 @@ setInterval(async () => {
         subject: 'Your room is free',
         html:
           '<p>The ' +
-          roomName +
-          ' is free for reservation. You have 30 minutes to reserve it. Otherwise, an email will be sent to the next person on the waiting list.</p>',
+          room.name +
+          " is free for reservation. You have 30 minutes to reserve it. Otherwise, an email will be sent to the next person on the waiting list.</p> <p>If you don't need the room anymore please click on the link: http://localhost:3000/api/cancel/" +
+          room.id +
+          '</p>',
       }
       transporter.sendMail(mailOptions, (error, info) => {
         if (error) {
