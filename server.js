@@ -39,8 +39,7 @@ const Room = new graphql.GraphQLObjectType({
       type: new graphql.GraphQLList(Waiting),
       extensions: {
         joinMonster: {
-          sqlJoin: (roomTable, waitingTable, args) =>
-            `${roomTable}.id = ${waitingTable}.roomid`,
+          sqlJoin: (roomTable, waitingTable, args) => `${roomTable}.id = ${waitingTable}.roomid`,
           orderBy: 'id',
         },
       },
@@ -114,12 +113,8 @@ const MutationRoot = new graphql.GraphQLObjectType({
       },
       resolve: async (parent, args, context, resolveInfo) => {
         try {
-          return (
-            await client.query(
-              'INSERT INTO waiting(email, name, roomid) VALUES ($1,$2,$3) RETURNING *',
-              [args.email, args.name, args.roomid]
-            )
-          ).rows[0]
+          return (await client.query('INSERT INTO waiting(email, name, roomid) VALUES ($1,$2,$3) RETURNING *', [args.email, args.name, args.roomid]))
+            .rows[0]
         } catch (err) {
           console.error('Error inserting into waiting:', err)
           throw new Error('Failed to insert into waiting')
@@ -134,10 +129,9 @@ const MutationRoot = new graphql.GraphQLObjectType({
       resolve: async (parent, args, context, resolveInfo) => {
         try {
           return (
-            await client.query(
-              'UPDATE Room SET BusyStart = NULL, BusyEnd = NULL, Organizer = NULL, Busy = FALSE WHERE Id = $1 RETURNING *',
-              [args.roomid]
-            )
+            await client.query('UPDATE Room SET BusyStart = NULL, BusyEnd = NULL, Organizer = NULL, Busy = FALSE WHERE Id = $1 RETURNING *', [
+              args.roomid,
+            ])
           ).rows[0]
         } catch (err) {
           console.error('Failed to cancel:', err)
@@ -152,12 +146,7 @@ const MutationRoot = new graphql.GraphQLObjectType({
       },
       resolve: async (parent, args, context, resolveInfo) => {
         try {
-          return (
-            await client.query(
-              'DELETE FROM waiting WHERE id = $1 RETURNING *',
-              [args.waitid]
-            )
-          ).rows[0]
+          return (await client.query('DELETE FROM waiting WHERE id = $1 RETURNING *', [args.waitid])).rows[0]
         } catch (err) {
           console.error('Failed to remove:', err)
           throw new Error('Failed to remove')
@@ -193,7 +182,7 @@ app.use(
 )
 app.listen(process.env.PORT || 4000)
 
-//The part that verifies and send mails
+//Verifie and send mails
 setInterval(async () => {
   //Update my database from the rooms API
   const fetchRooms = async () => {
@@ -209,81 +198,58 @@ setInterval(async () => {
   const roomsApi = await fetchRooms()
   const roomsDb = (await client.query('SELECT * from room')).rows
   for (let i = 0; i < roomsApi.length; i++) {
-    if (roomsDb[i]) {
-      if (!roomsDb[i].busy && roomsApi[i].busy) {
+    const currentRoomDB = roomsDb.filter((r) => roomsApi[i].Name == r.name)[0]
+    if (currentRoomDB) {
+      if (!currentRoomDB.busy && roomsApi[i].Busy) {
+        //WORKING
+        await client.query('UPDATE room SET busystart = $1, busyend = $2, organizer = $3, busy = TRUE WHERE name = $4', [
+          roomsApi[i].Appointments[0].Start,
+          roomsApi[i].Appointments[0].End,
+          roomsApi[i].Appointments[0].Organizer,
+          roomsApi[i].Name,
+        ])
+        console.log('Room updated to Busy')
+      } else if (currentRoomDB.busy && roomsApi[i].Busy) {
         //NOT TESTED
-        await client.query(
-          'UPDATE room SET busystart = $1, busyend = $2, organizer = $3, busy = TRUE WHERE name = $4',
-          [
+        if (currentRoomDB.busystart != roomsApi[i].Appointments[0].Start) {
+          await client.query('UPDATE room SET busystart = $1, busyend = $2, organizer = $3, busy = TRUE WHERE name = $4', [
             roomsApi[i].Appointments[0].Start,
             roomsApi[i].Appointments[0].End,
             roomsApi[i].Appointments[0].Organizer,
-            roomsDb[i].id,
-          ]
-        )
-        console.log('Room updated to Busy')
-      } else if (roomsDb[i].busy && roomsApi[i].busy) {
-        //NOT TESTED
-        if (
-          roomsDb[i].organizer != roomsApi[i].Appointments[0].Organizer ||
-          roomsDb[i].busystart != roomsApi[i].Appointments[0].Start
-        ) {
-          await client.query(
-            'UPDATE room SET busystart = $1, busyend = $2, organizer = $3, busy = TRUE WHERE name = $4',
-            [
-              roomsApi[i].Appointments[0].Start,
-              roomsApi[i].Appointments[0].End,
-              roomsApi[i].Appointments[0].Organizer,
-              roomsDb[i].id,
-            ]
-          )
+            roomsApi[i].Name,
+          ])
           console.log('Room updated, it got a reservation.')
         }
-      } else if (roomsDb[i].busy) {
+      } else if (currentRoomDB.busy) {
         const current = new Date()
-        const busyEnd = new Date(parseFloat(roomsDb[i].busyend))
+        const busyEnd = new Date(parseFloat(currentRoomDB.busyend))
         if (current > busyEnd) {
           //WORKING
-          await client.query(
-            'UPDATE room SET busystart = NULL, busyend = NULL, organizer = NULL, busy = false WHERE id = $1',
-            [roomsDb[i].id]
-          )
+          await client.query('UPDATE room SET busystart = NULL, busyend = NULL, organizer = NULL, busy = false WHERE id = $1', [currentRoomDB.id])
           console.log('Room updated to Free')
         }
       }
     } else {
-      console.log('Table not on the database, creating')
-      if (roomsApi[i].busy) {
-        //NOT TESTED
-        await client.query(
-          'INSERT INTO room (name,busystart,busyend,organizer,busy) VALUES($1,$2,$3,$4,$5)',
-          [
-            roomsApi[i].Name,
-            roomsApi[i].Appointments[0].Start,
-            roomsApi[i].Appointments[0].End,
-            roomsApi[i].Appointments[0].Organizer,
-            true,
-          ]
-        )
+      console.log('Room not on the database, creating')
+      if (roomsApi[i].Busy) {
+        //WORKING
+        await client.query('INSERT INTO room (name,busystart,busyend,organizer,busy) VALUES($1,$2,$3,$4,$5)', [
+          roomsApi[i].Name,
+          roomsApi[i].Appointments[0].Start,
+          roomsApi[i].Appointments[0].End,
+          roomsApi[i].Appointments[0].Organizer,
+          true,
+        ])
       } else {
         //WORKING
-        await client.query('INSERT INTO room (name,busy) VALUES($1,$2)', [
-          roomsApi[i].Name,
-          false,
-        ])
+        await client.query('INSERT INTO room (name,busy) VALUES($1,$2)', [roomsApi[i].Name, false])
       }
     }
   }
   //Verify the rooms and send email if free
-  const roomsWaited = (
-    await client.query('SELECT DISTINCT RoomId FROM Waiting;')
-  ).rows
+  const roomsWaited = (await client.query('SELECT DISTINCT RoomId FROM Waiting;')).rows
   for (let i = 0; i < roomsWaited.length; i++) {
-    const busy = (
-      await client.query('SELECT busy FROM room WHERE id = $1', [
-        roomsWaited[i].roomid,
-      ])
-    ).rows[0].busy
+    const busy = (await client.query('SELECT busy FROM room WHERE id = $1', [roomsWaited[i].roomid])).rows[0].busy
     if (busy) {
       console.log('The room is still busy.')
     } else {
@@ -298,15 +264,12 @@ setInterval(async () => {
       //Updates the room to busy with the end time +30min from the current
       const current = new Date().getTime()
       const room = (
-        await client.query(
-          'UPDATE room SET busystart = $1, busyend = $2, organizer = $3, busy = TRUE WHERE id = $4 RETURNING name,id',
-          [
-            current,
-            current + 1800000, //adiciona 30 min
-            waiting.name,
-            roomsWaited[i].roomid,
-          ]
-        )
+        await client.query('UPDATE room SET busystart = $1, busyend = $2, organizer = $3, busy = TRUE WHERE id = $4 RETURNING name,id', [
+          current,
+          current + 1800000, //adiciona 30 min
+          waiting.name,
+          roomsWaited[i].roomid,
+        ])
       ).rows[0]
       //Email sender
       const mailOptions = {
